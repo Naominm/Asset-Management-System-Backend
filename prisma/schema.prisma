@@ -25,6 +25,21 @@ model User {
   createdAt     DateTime @default(now())
 }
 
+model AccessRequest {
+  id            Int      @id @default(autoincrement())
+  fullName      String
+  staffNo       String
+  jobTitle      String
+  email         String
+  departmentId  Int
+  roleRequested Role
+  reason        String
+
+  approved      Boolean  @default(false)
+
+  createdAt     DateTime @default(now())
+}
+
 enum Role{
   ICT_OFFICER
   ICT_ADMIN
