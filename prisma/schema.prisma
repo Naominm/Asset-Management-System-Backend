@@ -14,19 +14,21 @@ datasource db {
 }
 
 model User {
-  id            Int      @id @default(autoincrement())
-  fullName      String
-  staffNo       String   @unique
-  jobTitle      String
-  email         String   @unique
-  password      String
-  role          Role
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
+  id           Int        @id @default(autoincrement())
+  fullName     String
+  staffNo      String     @unique
+  jobTitle     String
+  email        String     @unique
+  password     String
+  role         Role
+  departmentId Int
+  department   Department @relation(fields: [departmentId], references: [id])
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
 }
 
 model AccessRequest {
-  id            Int      @id @default(autoincrement())
+  id            Int    @id @default(autoincrement())
   fullName      String
   staffNo       String
   jobTitle      String
@@ -35,13 +37,18 @@ model AccessRequest {
   roleRequested Role
   reason        String
 
-  approved      Boolean  @default(false)
+  approved Boolean @default(false)
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 }
 
-enum Role{
+model Department {
+  id    Int    @id @default(autoincrement())
+  name  String
+  Users User[]
+}
+
+enum Role {
   ICT_OFFICER
   ICT_ADMIN
 }
-
