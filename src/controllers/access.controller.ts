@@ -42,12 +42,10 @@ export const createAccessRequest = async (
 
     await notifyAdmin(fullName, email);
 
-    return res
-      .status(201)
-      .json({
-        message: "Request submitted. Admin notified.",
-        requestId: request.id,
-      });
+    return res.status(201).json({
+      message: "Request submitted. Admin notified.",
+      requestId: request.id,
+    });
   } catch (error) {
     console.error("Request Error:", error);
     return res.status(500).json({ message: "Failed to submit request" });
