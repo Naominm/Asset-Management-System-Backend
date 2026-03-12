@@ -5,12 +5,12 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -44,7 +44,7 @@ model AccessRequest {
 
 model Department {
   id    Int    @id @default(autoincrement())
-  name  String
+  name  String @unique
   Users User[]
 }
 
