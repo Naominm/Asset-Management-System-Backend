@@ -1,14 +1,13 @@
-// Import the PRE-CONFIGURED prisma instance from your own file
-import { prisma } from './prisma.js'; 
+import { prisma } from "./prisma.js";
 
 async function main() {
   const departments = [
-    { name: 'IT Support' },
-    { name: 'Network' },
-    { name: 'Hardware' },
-    { name: 'Software' },
-    { name: 'Finance' },
-    { name: 'HR' },
+    { name: "IT Support" },
+    { name: "Network" },
+    { name: "Hardware" },
+    { name: "Software" },
+    { name: "Finance" },
+    { name: "HR" },
   ];
 
   for (const dept of departments) {
@@ -19,7 +18,7 @@ async function main() {
     });
   }
 
-  console.log('Departments seeded successfully');
+  console.log("Departments seeded successfully");
 }
 
 main()
