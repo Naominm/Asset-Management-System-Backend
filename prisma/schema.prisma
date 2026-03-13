@@ -10,7 +10,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // url      = env("DATABASE_URL")
 }
 
 model User {
@@ -43,12 +43,30 @@ model AccessRequest {
 }
 
 model Department {
-  id    Int    @id @default(autoincrement())
-  name  String @unique
-  Users User[]
+  id     Int     @id @default(autoincrement())
+  name   String  @unique
+  Users  User[]
+  assets Asset[]
+}
+
+model Asset {
+  id           Int         @id @default(autoincrement())
+  assetTag     String
+  name         String
+  type         String
+  departmentId Int
+  department   Department  @relation(fields: [departmentId], references: [id])
+  status       AssetStatus @default(Available)
 }
 
 enum Role {
   ICT_OFFICER
   ICT_ADMIN
+}
+
+enum AssetStatus {
+  Available
+  Assigned
+  InStore
+  Maintenance
 }
