@@ -50,22 +50,39 @@ model Department {
 }
 
 model Asset {
-  id                Int         @id @default(autoincrement())
-  tagNo             String      @unique
-  systemAssetId     String?     @unique
+  id                Int           @id @default(autoincrement())
+  tagNo             String        @unique
+  systemAssetId     String?       @unique
   category          String
   subCategory       String?
   assetDescription  String?
   make              String
   model             String
   physicalCondition String?
-  serialNumber      String      @unique
+  serialNumber      String        @unique
   macAddress        String?
   imeiNumber        String?
   color             String?
   departmentId      Int
-  department        Department  @relation(fields: [departmentId], references: [id])
-  status            AssetStatus @default(Available)
+  department        Department    @relation(fields: [departmentId], references: [id])
+  status            AssetStatus   @default(Available)
+  hardwareSpec      HardwareSpec?
+}
+
+model HardwareSpec {
+  id              Int     @id @default(autoincrement())
+  assetId         Int     @unique
+  asset           Asset   @relation(fields: [assetId], references: [id])
+  processor       String?
+  ram             String?
+  storage         String?
+  screenSize      String?
+  powerRating     String?
+  color           String?
+  operatingSystem String?
+  osVersion       String?
+  ipAddress       String?
+  hostName        String?
 }
 
 enum Role {
