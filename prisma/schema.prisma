@@ -50,13 +50,22 @@ model Department {
 }
 
 model Asset {
-  id           Int         @id @default(autoincrement())
-  assetTag     String
-  name         String
-  type         String
-  departmentId Int
-  department   Department  @relation(fields: [departmentId], references: [id])
-  status       AssetStatus @default(Available)
+  id                Int         @id @default(autoincrement())
+  tagNo             String      @unique
+  systemAssetId     String?     @unique
+  category          String
+  subCategory       String?
+  assetDescription  String?
+  make              String
+  model             String
+  physicalCondition String?
+  serialNumber      String      @unique
+  macAddress        String?
+  imeiNumber        String?
+  color             String?
+  departmentId      Int
+  department        Department  @relation(fields: [departmentId], references: [id])
+  status            AssetStatus @default(Available)
 }
 
 enum Role {
