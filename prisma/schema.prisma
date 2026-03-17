@@ -67,6 +67,7 @@ model Asset {
   department        Department    @relation(fields: [departmentId], references: [id])
   status            AssetStatus   @default(Available)
   hardwareSpec      HardwareSpec?
+  procurement       Procurement?
 }
 
 model HardwareSpec {
@@ -83,6 +84,23 @@ model HardwareSpec {
   osVersion       String?
   ipAddress       String?
   hostName        String?
+}
+
+model Procurement {
+  id               Int       @id @default(autoincrement())
+  assetId          Int       @unique
+  asset            Asset     @relation(fields: [assetId], references: [id])
+  procurementDate  DateTime
+  supplierVendor   String
+  fundingSource    String?
+  invoiceNumber    String?
+  iopNumber        String?
+  purchasePriceKES Float?
+  warrantyStart    DateTime?
+  warrantyEnd      DateTime?
+  warrantyType     String?
+  warrantyProvider String?
+  warrantyContact  String?
 }
 
 enum Role {
