@@ -5,6 +5,7 @@ import {
   approveAccessRequest,
 } from "./controllers/access.controller.js";
 import authRoutes from "../src/routes/auth.route.js";
+import assetRoutes from "../src/routes/asset.routes.js";
 
 dotenv.config();
 const app: Express = express();
@@ -13,6 +14,7 @@ const port = process.env.PORT || 5000;
 app.use(express.json());
 app.use("/access-request", createAccessRequest);
 app.use("/approve-request", approveAccessRequest);
+app.use("/createAsset", assetRoutes);
 app.use("/api", authRoutes);
 
 app.listen(port, () => {

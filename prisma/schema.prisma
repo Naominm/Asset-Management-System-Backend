@@ -14,17 +14,18 @@ datasource db {
 }
 
 model User {
-  id           Int        @id @default(autoincrement())
+  id           Int           @id @default(autoincrement())
   fullName     String
-  staffNo      String     @unique
+  staffNo      String        @unique
   jobTitle     String
-  email        String     @unique
+  email        String        @unique
   password     String
   role         Role
   departmentId Int
-  department   Department @relation(fields: [departmentId], references: [id])
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
+  department   Department    @relation(fields: [departmentId], references: [id])
+  activityLogs ActivityLog[]
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
 }
 
 model AccessRequest {
@@ -70,6 +71,7 @@ model Asset {
   hardwareSpec      HardwareSpec?
   procurement       Procurement?
   assignment        AssetAssignment[]
+  activityLogs      ActivityLog[]
 }
 
 model HardwareSpec {
@@ -121,6 +123,25 @@ model AssetAssignment {
   disposalMethod String?
   assignedAt     DateTime   @default(now())
   returnedAt     DateTime?
+}
+
+model ActivityLog {
+  id        Int          @id @default(autoincrement())
+  type      ActivityType
+  message   String
+  assetId   Int?
+  asset     Asset?       @relation(fields: [assetId], references: [id])
+  userId    Int?
+  user      User?        @relation(fields: [userId], references: [id])
+  createdAt DateTime     @default(now())
+}
+
+enum ActivityType {
+  REGISTRATION
+  ASSIGNMENT
+  MAINTENANCE
+  TICKET_CREATED
+  STATUS_CHANGE
 }
 
 enum Role {
