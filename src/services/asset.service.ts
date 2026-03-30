@@ -18,7 +18,14 @@ export const createAsset = async (data: any, userId: number) => {
   } = data;
 
   // ✅ Validation
-  if (!tagNo || !serialNumber || !category || !make || !model || !departmentId) {
+  if (
+    !tagNo ||
+    !serialNumber ||
+    !category ||
+    !make ||
+    !model ||
+    !departmentId
+  ) {
     throw new Error("Missing required fields");
   }
 
