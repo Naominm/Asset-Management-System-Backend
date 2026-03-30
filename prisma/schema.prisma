@@ -14,22 +14,24 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
-  fullName     String
-  staffNo      String        @unique
-  jobTitle     String
-  email        String        @unique
-  password     String
-  role         Role
-  departmentId Int
-  department   Department    @relation(fields: [departmentId], references: [id])
-  activityLogs ActivityLog[]
-  isActive     Boolean       @default(true)
-  createdAt    DateTime      @default(now())
+  id              Int               @id @default(autoincrement())
+  fullName        String
+  staffNo         String            @unique
+  jobTitle        String
+  email           String            @unique
+  password        String
+  role            Role
+  departmentId    Int
+  department      Department        @relation(fields: [departmentId], references: [id])
+  activityLogs    ActivityLog[]
+  assetAssignment AssetAssignment[]
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 model AccessRequest {
-  id            Int    @id @default(autoincrement())
+  id            Int        @id @default(autoincrement())
   fullName      String
   staffNo       String
   jobTitle      String
@@ -37,6 +39,7 @@ model AccessRequest {
   departmentId  Int
   roleRequested Role
   reason        String
+  department    Department @relation(fields: [departmentId], references: [id])
 
   approved Boolean @default(false)
 
@@ -46,9 +49,10 @@ model AccessRequest {
 model Department {
   id              Int               @id @default(autoincrement())
   name            String            @unique
-  Users           User[]
+  users           User[]
   assets          Asset[]
   assetAssignment AssetAssignment[]
+  accessRequest   AccessRequest[]
 }
 
 model Asset {
@@ -113,6 +117,8 @@ model AssetAssignment {
   asset          Asset      @relation(fields: [assetId], references: [id])
   departmentId   Int
   department     Department @relation(fields: [departmentId], references: [id])
+  userId         Int?
+  user           User?      @relation(fields: [userId], references: [id])
   assignedTo     String
   payRollNo      String
   floorLevel     String?
