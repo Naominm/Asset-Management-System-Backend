@@ -124,3 +124,24 @@ export const getAllAssets = async (filters: any) => {
     totalPages: Math.ceil(totalCount / limit),
   };
 };
+
+export const getAssetById = async (id: number) => {
+  const asset = await prisma.asset.findUnique({
+    where: { id },
+    include: {
+      hardwareSpec: true,
+      procurement: true,
+      department: { select: { name: true } },
+      assignment: {
+        orderBy: { assignedAt: "desc" },
+        take: 5, // Last 5 people who had it
+      },
+      _count: {
+        select: { assignment: true },
+      },
+    },
+  });
+
+  if (!asset) throw new Error("Asset not found");
+  return asset;
+};

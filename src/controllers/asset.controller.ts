@@ -49,3 +49,20 @@ export const getStats = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ message: "Error fetching asset statistics" });
   }
 };
+
+// controllers/asset.controller.ts
+export const getAssetById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    // Extract the ID as a number, DON'T pass req to the service
+    const asset = await assetService.getAssetById(Number(id));
+
+    if (!asset) {
+      return res.status(404).json({ message: "Asset not found" });
+    }
+
+    return res.status(200).json(asset);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message });
+  }
+};
