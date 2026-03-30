@@ -14,7 +14,7 @@ const port = process.env.PORT || 5000;
 app.use(express.json());
 app.use("/access-request", createAccessRequest);
 app.use("/approve-request", approveAccessRequest);
-app.use("/createAsset", assetRoutes);
+app.use("/asset", assetRoutes);
 app.use("/api", authRoutes);
 
 app.listen(port, () => {

@@ -38,7 +38,6 @@ export const createAsset = async (data: any, userId: number) => {
     throw new Error("Asset with this serial number already exists");
   }
 
-  // ✅ Transaction (asset + log together)
   const asset = await prisma.$transaction(async (tx) => {
     const newAsset = await tx.asset.create({
       data: {
@@ -54,7 +53,9 @@ export const createAsset = async (data: any, userId: number) => {
         macAddress,
         imeiNumber,
         color,
-        departmentId,
+        department: {
+          connect: { id: Number(departmentId) },
+        },
       },
     });
 
@@ -71,4 +72,55 @@ export const createAsset = async (data: any, userId: number) => {
   });
 
   return asset;
+};
+
+// asset.service.ts
+
+export const getAssetStats = async () => {
+  const [total, assigned, inStore, maintenance] = await Promise.all([
+    prisma.asset.count(),
+    prisma.asset.count({ where: { status: "Assigned" } }),
+    prisma.asset.count({ where: { status: "InStore" } }),
+    prisma.asset.count({ where: { status: "Maintenance" } }),
+  ]);
+
+  return { total, assigned, inStore, maintenance };
+};
+
+export const getAllAssets = async (filters: any) => {
+  const { status, search, page = 1, limit = 10 } = filters;
+
+  const where: any = {};
+
+  if (status && status !== "All") {
+    where.status = status;
+  }
+
+  if (search) {
+    where.OR = [
+      { tagNo: { contains: search, mode: "insensitive" } },
+      { serialNumber: { contains: search, mode: "insensitive" } },
+      { model: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  const [assets, totalCount] = await Promise.all([
+    prisma.asset.findMany({
+      where,
+      skip: (page - 1) * limit,
+      take: Number(limit),
+      include: {
+        department: { select: { name: true } }, // To show the DEPT column
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.asset.count({ where }),
+  ]);
+
+  return {
+    assets,
+    totalCount,
+    page,
+    totalPages: Math.ceil(totalCount / limit),
+  };
 };
