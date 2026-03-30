@@ -119,7 +119,7 @@ model AssetAssignment {
   roomNumber     String?
   accessories    String?
   notes          String?
-  disposalDate   String?
+  disposalDate   DateTime?
   disposalMethod String?
   assignedAt     DateTime   @default(now())
   returnedAt     DateTime?
