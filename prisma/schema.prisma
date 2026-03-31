@@ -76,7 +76,7 @@ model Asset {
   procurement       Procurement?
   assignment        AssetAssignment[]
   activityLogs      ActivityLog[]
-  createdAt DateTime @default(now())
+  createdAt         DateTime          @default(now())
 }
 
 model HardwareSpec {
@@ -113,23 +113,26 @@ model Procurement {
 }
 
 model AssetAssignment {
-  id             Int        @id @default(autoincrement())
-  assetId        Int
-  asset          Asset      @relation(fields: [assetId], references: [id])
-  departmentId   Int
-  department     Department @relation(fields: [departmentId], references: [id])
-  userId         Int?
-  user           User?      @relation(fields: [userId], references: [id])
-  assignedTo     String
-  payRollNo      String
-  floorLevel     String?
-  roomNumber     String?
-  accessories    String?
-  notes          String?
-  disposalDate   DateTime?
-  disposalMethod String?
-  assignedAt     DateTime   @default(now())
-  returnedAt     DateTime?
+  id                      Int              @id @default(autoincrement())
+  assetId                 Int
+  asset                   Asset            @relation(fields: [assetId], references: [id])
+  departmentId            Int
+  department              Department       @relation(fields: [departmentId], references: [id])
+  userId                  Int?
+  user                    User?            @relation(fields: [userId], references: [id])
+  assignedTo              String
+  payRollNo               String
+  floorLevel              String?
+  roomNumber              String?
+  accessories             String?
+  notes                   String?
+  status                  AssignmentStatus @default(ACTIVE)
+  isOverdue               Boolean          @default(false)
+  expectedReturnCondition String?
+  disposalDate            DateTime?
+  disposalMethod          String?
+  assignedAt              DateTime         @default(now())
+  returnedAt              DateTime?
 }
 
 model ActivityLog {
@@ -161,4 +164,10 @@ enum AssetStatus {
   Assigned
   InStore
   Maintenance
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  RETURNED
+  OVERDUE
 }
