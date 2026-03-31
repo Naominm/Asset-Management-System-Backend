@@ -115,6 +115,7 @@ model Procurement {
 model AssetAssignment {
   id                      Int              @id @default(autoincrement())
   assetId                 Int
+  refNo                   String           @unique
   asset                   Asset            @relation(fields: [assetId], references: [id])
   departmentId            Int
   department              Department       @relation(fields: [departmentId], references: [id])
