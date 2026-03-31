@@ -4,6 +4,7 @@ import {
   createAccessRequest,
   approveAccessRequest,
 } from "./controllers/access.controller.js";
+import assignmentRoutes from "./routes/assignment.routes.js";
 import authRoutes from "../src/routes/auth.route.js";
 import assetRoutes from "../src/routes/asset.routes.js";
 
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use("/access-request", createAccessRequest);
 app.use("/approve-request", approveAccessRequest);
 app.use("/asset", assetRoutes);
+app.use("/assignments", assignmentRoutes);
 app.use("/api", authRoutes);
 
 app.listen(port, () => {
