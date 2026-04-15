@@ -5,8 +5,8 @@ import {
   approveAccessRequest,
 } from "./controllers/access.controller.js";
 import assignmentRoutes from "./routes/assignment.routes.js";
-import authRoutes from "../src/routes/auth.route.js";
-import assetRoutes from "../src/routes/asset.routes.js";
+import authRoutes from "./routes/auth.route.js";
+import assetRoutes from "./routes/asset.routes.js";
 
 dotenv.config();
 const app: Express = express();
