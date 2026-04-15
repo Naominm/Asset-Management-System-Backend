@@ -6,7 +6,7 @@ export default defineConfig({
   datasource: {
     url: process.env.DATABASE_URL!,
   },
-  migrations: {
-    seed: "node dist/prisma/seed.js",
-  },
+ migrations: {
+  seed: "node dist/seedDepartment.js",
+},
 });
