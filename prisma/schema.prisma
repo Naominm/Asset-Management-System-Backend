@@ -1,16 +1,9 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  // url      = env("DATABASE_URL")
 }
 
 model User {
@@ -21,13 +14,12 @@ model User {
   email           String            @unique
   password        String
   role            Role
+  isActive        Boolean           @default(true)
+  createdAt       DateTime          @default(now())
   departmentId    Int
-  department      Department        @relation(fields: [departmentId], references: [id])
   activityLogs    ActivityLog[]
   assetAssignment AssetAssignment[]
-
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  department      Department        @relation(fields: [departmentId], references: [id])
 }
 
 model AccessRequest {
@@ -39,50 +31,47 @@ model AccessRequest {
   departmentId  Int
   roleRequested Role
   reason        String
+  approved      Boolean    @default(false)
+  createdAt     DateTime   @default(now())
   department    Department @relation(fields: [departmentId], references: [id])
-
-  approved Boolean @default(false)
-
-  createdAt DateTime @default(now())
 }
 
 model Department {
   id              Int               @id @default(autoincrement())
   name            String            @unique
-  users           User[]
+  accessRequest   AccessRequest[]
   assets          Asset[]
   assetAssignment AssetAssignment[]
-  accessRequest   AccessRequest[]
+  users           User[]
 }
 
 model Asset {
   id                Int               @id @default(autoincrement())
+  departmentId      Int
+  status            AssetStatus       @default(Available)
   tagNo             String            @unique
-  systemAssetId     String?           @unique
-  category          String
-  subCategory       String?
   assetDescription  String?
+  category          String
+  color             String?
+  imeiNumber        String?
+  macAddress        String?
   make              String
   model             String
   physicalCondition String?
   serialNumber      String            @unique
-  macAddress        String?
-  imeiNumber        String?
-  color             String?
-  departmentId      Int
+  subCategory       String?
+  systemAssetId     String?           @unique
+  createdAt         DateTime          @default(now())
+  activityLogs      ActivityLog[]
   department        Department        @relation(fields: [departmentId], references: [id])
-  status            AssetStatus       @default(Available)
+  assignment        AssetAssignment[]
   hardwareSpec      HardwareSpec?
   procurement       Procurement?
-  assignment        AssetAssignment[]
-  activityLogs      ActivityLog[]
-  createdAt         DateTime          @default(now())
 }
 
 model HardwareSpec {
   id              Int     @id @default(autoincrement())
   assetId         Int     @unique
-  asset           Asset   @relation(fields: [assetId], references: [id])
   processor       String?
   ram             String?
   storage         String?
@@ -93,12 +82,12 @@ model HardwareSpec {
   osVersion       String?
   ipAddress       String?
   hostName        String?
+  asset           Asset   @relation(fields: [assetId], references: [id])
 }
 
 model Procurement {
   id               Int       @id @default(autoincrement())
   assetId          Int       @unique
-  asset            Asset     @relation(fields: [assetId], references: [id])
   procurementDate  DateTime
   supplierVendor   String
   fundingSource    String?
@@ -110,30 +99,31 @@ model Procurement {
   warrantyType     String?
   warrantyProvider String?
   warrantyContact  String?
+  asset            Asset     @relation(fields: [assetId], references: [id])
 }
 
 model AssetAssignment {
   id                      Int              @id @default(autoincrement())
   assetId                 Int
-  refNo                   String           @unique
-  asset                   Asset            @relation(fields: [assetId], references: [id])
   departmentId            Int
-  department              Department       @relation(fields: [departmentId], references: [id])
-  userId                  Int?
-  user                    User?            @relation(fields: [userId], references: [id])
   assignedTo              String
   payRollNo               String
   floorLevel              String?
   roomNumber              String?
   accessories             String?
   notes                   String?
-  status                  AssignmentStatus @default(ACTIVE)
-  isOverdue               Boolean          @default(false)
-  expectedReturnCondition String?
-  disposalDate            DateTime?
   disposalMethod          String?
   assignedAt              DateTime         @default(now())
   returnedAt              DateTime?
+  disposalDate            DateTime?
+  userId                  Int?
+  expectedReturnCondition String?
+  isOverdue               Boolean          @default(false)
+  status                  AssignmentStatus @default(ACTIVE)
+  refNo                   String           @unique
+  asset                   Asset            @relation(fields: [assetId], references: [id])
+  department              Department       @relation(fields: [departmentId], references: [id])
+  user                    User?            @relation(fields: [userId], references: [id])
 }
 
 model ActivityLog {
@@ -141,10 +131,10 @@ model ActivityLog {
   type      ActivityType
   message   String
   assetId   Int?
-  asset     Asset?       @relation(fields: [assetId], references: [id])
   userId    Int?
-  user      User?        @relation(fields: [userId], references: [id])
   createdAt DateTime     @default(now())
+  asset     Asset?       @relation(fields: [assetId], references: [id])
+  user      User?        @relation(fields: [userId], references: [id])
 }
 
 enum ActivityType {
