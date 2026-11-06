@@ -1,57 +1,169 @@
 import type { Request, Response } from "express";
 import bcrypt from "bcrypt";
-import jwt, { type Secret, type SignOptions } from "jsonwebtoken";
+import jwt, { type SignOptions } from "jsonwebtoken";
 import { prisma } from "../prisma.js";
+import type { AuthRequest } from "../types/auth.types.js";
+import {
+  sendAccessEmail,
+  sendPasswordResetEmail,
+} from "../services/emailService.js";
+import { generateTempPassword } from "../utils/generateRandomPassword.js";
+import { passwordFingerprint } from "../utils/sessionFingerprint.js";
+import {
+  clearKey,
+  isLimited,
+  minutesUntilReset,
+  recordHit,
+  tryConsume,
+} from "../utils/rateLimit.js";
+
+const MAX_FAILED_LOGINS = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const MAX_RESET_EMAILS = 3;
+const RESET_WINDOW_MS = 15 * 60 * 1000;
+
+function toRoleLabel(role: string): string {
+  if (role === "ICT_ADMIN") return "ICT Administrator";
+  if (role === "ICT_OFFICER") return "ICT Officer";
+  if (role === "PS") return "Principal Secretary";
+  if (role === "DIRECTOR") return "Director";
+  if (role === "ASSISTANT_DIRECTOR") return "Assistant Director";
+  if (role === "HOD") return "HOD";
+  return "End User";
+}
+
+function isAdminRole(role: string): boolean {
+  return String(role || "").trim().toUpperCase() === "ICT_ADMIN";
+}
+
+// Reset links are signed with the JWT secret plus the user's current password
+// hash: they cannot pass as session tokens and die once the password changes.
+function resetTokenSecret(secret: string, passwordHash: string): string {
+  return `${secret}:reset:${passwordHash}`;
+}
+
+function createAuthToken(user: {
+  id: number;
+  role: string;
+  departmentId: number;
+  password: string;
+}): string {
+  const secret = process.env.JWT_SECRET;
+
+  if (!secret) {
+    throw new Error("JWT_SECRET is not defined");
+  }
+
+  const tokenTtl = (process.env.JWT_EXPIRES_IN?.trim() ||
+    "7d") as NonNullable<SignOptions["expiresIn"]>;
+
+  return jwt.sign(
+    {
+      id: user.id,
+      role: user.role,
+      departmentId: user.departmentId,
+      pv: passwordFingerprint(user.password),
+    },
+    secret,
+    { expiresIn: tokenTtl },
+  );
+}
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
+    const { identifier, email, password } = req.body;
+
+    const normalizedIdentifier = String(identifier || email || "")
+      .trim()
+      .toLowerCase();
+
+    const rawIdentifier = String(identifier || email || "").trim();
+    const cleanPassword = String(password || "").trim();
+
+    if (!normalizedIdentifier || !cleanPassword) {
       return res.status(400).json({
-        message: "Email and password are required",
+        message: "Identifier and password are required",
       });
     }
-    const user = await prisma.user.findUnique({
-      where: { email },
+
+    const loginKey = `login:${normalizedIdentifier}`;
+
+    if (isLimited(loginKey, MAX_FAILED_LOGINS, LOGIN_WINDOW_MS)) {
+      const minutes = minutesUntilReset(loginKey);
+      return res.status(429).json({
+        message: `Too many failed sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          {
+            email: { equals: normalizedIdentifier, mode: "insensitive" },
+          },
+          {
+            staffNo: { equals: rawIdentifier, mode: "insensitive" },
+          },
+        ],
+      },
+      include: { department: true },
     });
 
     if (!user) {
+      recordHit(loginKey, LOGIN_WINDOW_MS);
       return res.status(401).json({
         message: "Invalid email or password",
       });
     }
+
     if (!user.isActive) {
       return res.status(403).json({
         message: "Account not yet authorized. Contact administrator.",
       });
     }
 
-    const passwordMatch = await bcrypt.compare(password, user.password);
+    const passwordMatch = await bcrypt.compare(cleanPassword, user.password);
 
     if (!passwordMatch) {
+      recordHit(loginKey, LOGIN_WINDOW_MS);
       return res.status(401).json({
         message: "Invalid email or password",
       });
     }
-    const secret = process.env.JWT_SECRET;
 
-    if (!secret) {
-      throw new Error("JWT_SECRET is not defined");
+    clearKey(loginKey);
+    const token = createAuthToken(user);
+    const mappedRole = toRoleLabel(user.role);
+
+    if (user.mustChangePassword) {
+      return res.status(200).json({
+        message: "Temporary password accepted. Please change your password.",
+        token,
+        mustChangePassword: true,
+        user: {
+          id: user.id,
+          name: user.fullName,
+          email: user.email,
+          role: mappedRole,
+          department: user.department.name,
+          staffNumber: user.staffNo,
+          mustChangePassword: true,
+        },
+      });
     }
-
-    const options: SignOptions = {
-      expiresIn: "1d",
-    };
-
-    const token = jwt.sign({ id: user.id, role: user.role }, secret, options);
 
     return res.status(200).json({
       message: "Login successful",
       token,
+      mustChangePassword: false,
       user: {
         id: user.id,
-        fullName: user.fullName,
-        role: user.role,
+        name: user.fullName,
+        email: user.email,
+        role: mappedRole,
+        department: user.department.name,
+        staffNumber: user.staffNo,
+        mustChangePassword: false,
       },
     });
   } catch (error) {
@@ -60,5 +172,731 @@ export const login = async (req: Request, res: Response) => {
     return res.status(500).json({
       message: "Internal server error",
     });
+  }
+};
+
+export const logout = async (_req: Request, res: Response) => {
+  return res.status(200).json({ message: "Logout successful" });
+};
+
+export const me = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { department: true },
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const mappedRole = toRoleLabel(user.role);
+
+    return res.status(200).json({
+      user: {
+        id: user.id,
+        name: user.fullName,
+        email: user.email,
+        role: mappedRole,
+        department: user.department.name,
+        staffNumber: user.staffNo,
+        mustChangePassword: user.mustChangePassword,
+      },
+    });
+  } catch (error) {
+    console.error("ME ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const changeTemporaryPassword = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const userId = req.user?.id;
+
+    const currentPassword = String(req.body?.currentPassword || "").trim();
+    const newPassword = String(req.body?.newPassword || "").trim();
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        message: "Current password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: "New password must be at least 8 characters",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { department: true },
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+
+    if (!passwordMatch) {
+      return res.status(401).json({
+        message: "Current password is incorrect",
+      });
+    }
+
+    const sameAsCurrent = await bcrypt.compare(newPassword, user.password);
+
+    if (sameAsCurrent) {
+      return res.status(400).json({
+        message: "New password must be different from current password",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        mustChangePassword: false,
+      },
+      include: { department: true },
+    });
+
+    const token = createAuthToken(updatedUser);
+    const mappedRole = toRoleLabel(updatedUser.role);
+
+    return res.status(200).json({
+      message: "Password updated successfully",
+      token,
+      mustChangePassword: false,
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.fullName,
+        email: updatedUser.email,
+        role: mappedRole,
+        department: updatedUser.department.name,
+        staffNumber: updatedUser.staffNo,
+        mustChangePassword: false,
+      },
+    });
+  } catch (error) {
+    console.error("CHANGE TEMP PASSWORD ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    // Same reply either way, so this does not reveal which emails exist.
+    if (!tryConsume(`forgot:${email}`, MAX_RESET_EMAILS, RESET_WINDOW_MS)) {
+      return res.status(200).json({
+        message: "If an account exists for this email, a reset link has been sent.",
+      });
+    }
+
+    let user = await prisma.user.findFirst({
+      where: {
+        email: { equals: email, mode: "insensitive" },
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        isActive: true,
+        staffNo: true,
+      },
+    });
+
+    if (!user) {
+      const approvedRequest = await prisma.accessRequest.findFirst({
+        where: {
+          email: { equals: email, mode: "insensitive" },
+          approved: true,
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          fullName: true,
+          email: true,
+          staffNo: true,
+          jobTitle: true,
+          roleRequested: true,
+          departmentId: true,
+        },
+      });
+
+      if (approvedRequest) {
+        const existingByStaffNo = await prisma.user.findFirst({
+          where: {
+            staffNo: {
+              equals: approvedRequest.staffNo,
+              mode: "insensitive",
+            },
+          },
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            isActive: true,
+            staffNo: true,
+          },
+        });
+
+        if (existingByStaffNo) {
+          user = await prisma.user.update({
+            where: { id: existingByStaffNo.id },
+            data: {
+              email: approvedRequest.email.trim().toLowerCase(),
+              fullName: approvedRequest.fullName,
+              jobTitle: approvedRequest.jobTitle,
+              role: approvedRequest.roleRequested,
+              departmentId: approvedRequest.departmentId,
+              isActive: true,
+            },
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              isActive: true,
+              staffNo: true,
+            },
+          });
+        } else {
+          const tempPasswordHash = await bcrypt.hash(generateTempPassword(), 10);
+
+          user = await prisma.user.create({
+            data: {
+              fullName: approvedRequest.fullName,
+              staffNo: approvedRequest.staffNo,
+              jobTitle: approvedRequest.jobTitle,
+              email: approvedRequest.email.trim().toLowerCase(),
+              password: tempPasswordHash,
+              role: approvedRequest.roleRequested,
+              departmentId: approvedRequest.departmentId,
+              isActive: true,
+              mustChangePassword: true,
+            },
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              isActive: true,
+              staffNo: true,
+            },
+          });
+        }
+      }
+    }
+
+    if (user?.isActive) {
+      const resetSecret = process.env.JWT_SECRET;
+
+      if (!resetSecret) {
+        throw new Error("JWT_SECRET is not defined");
+      }
+
+      const account = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { password: true },
+      });
+
+      if (!account) {
+        throw new Error("User disappeared while creating reset token");
+      }
+
+      // Keyed to the current password hash, so the link stops working once used.
+      const resetToken = jwt.sign(
+        { id: user.id, email: user.email, purpose: "password-reset" },
+        resetTokenSecret(resetSecret, account.password),
+        { expiresIn: "30m" },
+      );
+
+      // FRONTEND_URL may hold a comma-separated CORS allow-list; use the first entry.
+      const frontendUrl =
+        process.env.FRONTEND_URL?.split(",")[0]?.trim() || "http://localhost:3000";
+
+      const resetUrl = `${frontendUrl}/reset-password?token=${encodeURIComponent(
+        resetToken,
+      )}`;
+
+      await sendPasswordResetEmail({
+        to: user.email,
+        name: user.fullName,
+        resetUrl,
+      });
+    }
+
+    return res.status(200).json({
+      message: "If an account exists for this email, a reset link has been sent.",
+    });
+  } catch (error) {
+    console.error("FORGOT PASSWORD ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const resetPasswordWithToken = async (req: Request, res: Response) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const newPassword = String(req.body?.newPassword || "").trim();
+
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        message: "Token and new password are required",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: "New password must be at least 8 characters",
+      });
+    }
+
+    const secret = process.env.JWT_SECRET;
+
+    if (!secret) {
+      throw new Error("JWT_SECRET is not defined");
+    }
+
+    // Read the user id first, then verify with that user's password-bound secret.
+    const unverified = jwt.decode(token) as { id?: number } | null;
+    const userId = Number(unverified?.id);
+
+    if (!Number.isFinite(userId)) {
+      return res.status(400).json({ message: "Invalid reset token" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, password: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(400).json({ message: "Invalid reset token" });
+    }
+
+    const decoded = jwt.verify(
+      token,
+      resetTokenSecret(secret, user.password),
+    ) as {
+      id?: number;
+      email?: string;
+      purpose?: string;
+    };
+
+    if (decoded.purpose !== "password-reset" || decoded.id !== user.id) {
+      return res.status(400).json({ message: "Invalid reset token" });
+    }
+
+    const sameAsCurrent = await bcrypt.compare(newPassword, user.password);
+
+    if (sameAsCurrent) {
+      return res.status(400).json({
+        message: "New password must be different from current password",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        mustChangePassword: false,
+      },
+    });
+
+    return res.status(200).json({ message: "Password updated successfully" });
+  } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+      return res.status(400).json({ message: "Reset link has expired" });
+    }
+
+    if (error instanceof jwt.JsonWebTokenError) {
+      return res.status(400).json({ message: "Invalid reset token" });
+    }
+
+    console.error("RESET PASSWORD ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const getAllUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isAdminRole(String(req.user?.role || ""))) {
+      return res.status(403).json({
+        message: "Unauthorized. Admin access required.",
+      });
+    }
+
+    const users = await prisma.user.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        staffNo: true,
+        role: true,
+        jobTitle: true,
+        department: { select: { name: true } },
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return res.status(200).json({
+      totalCount: users.length,
+      users: users.map((user) => ({
+        ...user,
+        role: toRoleLabel(user.role),
+      })),
+    });
+  } catch (error) {
+    console.error("GET ALL USERS ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const getSupportStaff = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const supportStaff = await prisma.user.findMany({
+      where: {
+        isActive: true,
+        role: {
+          in: ["ICT_ADMIN", "ICT_OFFICER"],
+        },
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        department: { select: { name: true } },
+      },
+      orderBy: [{ role: "asc" }, { fullName: "asc" }],
+    });
+
+    return res.status(200).json({
+      totalCount: supportStaff.length,
+      supportStaff: supportStaff.map((user) => ({
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: toRoleLabel(user.role),
+        department: user.department.name,
+      })),
+    });
+  } catch (error) {
+    console.error("GET SUPPORT STAFF ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const updateUserRole = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isAdminRole(String(req.user?.role || ""))) {
+      return res.status(403).json({
+        message: "Unauthorized. Admin access required.",
+      });
+    }
+
+    const { userId, role } = req.body as {
+      userId?: number;
+      role?: string;
+    };
+
+    if (!userId || !role) {
+      return res.status(400).json({
+        message: "User ID and role are required",
+      });
+    }
+
+    const allowedRoles = [
+      "END_USER",
+      "HOD",
+      "ICT_OFFICER",
+      "ICT_ADMIN",
+      "PS",
+      "DIRECTOR",
+      "ASSISTANT_DIRECTOR",
+    ];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    if (req.user?.id === userId && role !== "ICT_ADMIN") {
+      return res.status(400).json({
+        message: "Cannot change your own role from administrator",
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        role: role as "END_USER" | "HOD" | "ICT_OFFICER" | "ICT_ADMIN" | "PS" | "DIRECTOR" | "ASSISTANT_DIRECTOR",
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        staffNo: true,
+        role: true,
+        jobTitle: true,
+        department: { select: { name: true } },
+      },
+    });
+
+    return res.status(200).json({
+      message: "User role updated successfully",
+      user: {
+        ...updatedUser,
+        role: toRoleLabel(updatedUser.role),
+      },
+    });
+  } catch (error) {
+    console.error("UPDATE USER ROLE ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const removeUserAccount = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isAdminRole(String(req.user?.role || ""))) {
+      return res.status(403).json({
+        message: "Unauthorized. Admin access required.",
+      });
+    }
+
+    const userId = Number(req.params?.userId || req.body?.userId);
+
+    if (!Number.isFinite(userId)) {
+      return res.status(400).json({ message: "Valid userId is required" });
+    }
+
+    if (req.user?.id === userId) {
+      return res.status(400).json({
+        message: "You cannot remove your own account",
+      });
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isActive: true, fullName: true, email: true },
+    });
+
+    if (!existingUser || !existingUser.isActive) {
+      return res.status(404).json({ message: "User account not found" });
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { isActive: false },
+    });
+
+    return res.status(200).json({
+      message: "User account removed successfully",
+      user: {
+        id: existingUser.id,
+        fullName: existingUser.fullName,
+        email: existingUser.email,
+      },
+    });
+  } catch (error) {
+    console.error("REMOVE USER ACCOUNT ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+// Admins can create an account directly instead of waiting for a request.
+export const createUserAccount = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isAdminRole(String(req.user?.role || ""))) {
+      return res.status(403).json({
+        message: "Unauthorized. Admin access required.",
+      });
+    }
+
+    const fullName = String(req.body?.fullName || "").trim();
+    const staffNo = String(req.body?.staffNo || req.body?.staffNumber || "").trim();
+    const jobTitle = String(req.body?.jobTitle || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const role = String(req.body?.role || "").trim();
+    const departmentName = String(req.body?.department || "").trim();
+    const departmentId = Number(req.body?.departmentId);
+
+    if (!fullName || !staffNo || !jobTitle || !email) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    const allowedRoles = [
+      "END_USER",
+      "HOD",
+      "ICT_OFFICER",
+      "ICT_ADMIN",
+      "PS",
+      "DIRECTOR",
+      "ASSISTANT_DIRECTOR",
+    ];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    if (!Number.isFinite(departmentId) && !departmentName) {
+      return res.status(400).json({ message: "Department is required" });
+    }
+
+    // Accept either an id or a name, matching the access request flow.
+    const department = Number.isFinite(departmentId)
+      ? await prisma.department.findUnique({
+          where: { id: departmentId },
+          select: { id: true },
+        })
+      : await prisma.department.upsert({
+          where: { name: departmentName },
+          update: {},
+          create: { name: departmentName },
+          select: { id: true },
+        });
+
+    if (!department) {
+      return res.status(400).json({ message: "Department not found" });
+    }
+
+    const existingEmail = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
+      select: { id: true },
+    });
+
+    if (existingEmail) {
+      return res
+        .status(409)
+        .json({ message: "An account with this email already exists" });
+    }
+
+    const existingStaffNo = await prisma.user.findFirst({
+      where: { staffNo: { equals: staffNo, mode: "insensitive" } },
+      select: { id: true },
+    });
+
+    if (existingStaffNo) {
+      return res.status(409).json({
+        message: "This payroll number is already registered to another account",
+      });
+    }
+
+    const tempPassword = generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword.trim(), 10);
+
+    const user = await prisma.user.create({
+      data: {
+        fullName,
+        staffNo,
+        jobTitle,
+        email,
+        password: hashedPassword,
+        role: role as "END_USER" | "HOD" | "ICT_OFFICER" | "ICT_ADMIN" | "PS" | "DIRECTOR" | "ASSISTANT_DIRECTOR",
+        departmentId: department.id,
+        isActive: true,
+        mustChangePassword: true,
+      },
+      include: { department: true },
+    });
+
+    let emailSent = false;
+
+    try {
+      emailSent = await sendAccessEmail({
+        to: user.email,
+        name: user.fullName,
+        tempPassword,
+      });
+    } catch (emailError) {
+      console.error(
+        "[USER CREATE] Failed to send access email to:",
+        user.email,
+        emailError instanceof Error ? emailError.message : emailError,
+      );
+    }
+
+    // The password is returned once, to the admin who created the account, so
+    // they can hand it over when email is unavailable. It is never stored or
+    // logged in readable form: only its hash is kept.
+    return res.status(201).json({
+      message: emailSent
+        ? "Account created and temporary password sent"
+        : "Account created, but the email could not be sent. Give the officer the password below.",
+      emailSent,
+      temporaryPassword: tempPassword,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        staffNo: user.staffNo,
+        jobTitle: user.jobTitle,
+        role: toRoleLabel(user.role),
+        department: user.department.name,
+      },
+    });
+  } catch (error) {
+    console.error("CREATE USER ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+// A light list of active officers, used when choosing who to send a document
+// to. Any signed-in officer may read it; it carries no contact details.
+export const getDirectory = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const users = await prisma.user.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        fullName: true,
+        role: true,
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: [{ role: "asc" }, { fullName: "asc" }],
+    });
+
+    return res.status(200).json({
+      users: users.map((user) => ({
+        id: user.id,
+        fullName: user.fullName,
+        role: toRoleLabel(user.role),
+        department: user.department.name,
+        departmentId: user.department.id,
+      })),
+    });
+  } catch (error) {
+    console.error("DIRECTORY ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
