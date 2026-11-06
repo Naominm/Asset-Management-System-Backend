@@ -1,72 +1,71 @@
-# Asset Management System Backend – SDOJ
+# Asset Management System — Backend
 
-The Asset Management System backend for the State Department of Justice (SDOJ) was developed to provide a secure, centralized, and efficient platform for managing organizational assets and related operations. The backend was built using a modern server-side architecture to support scalability, maintainability, and real-time administrative workflows.
+REST API for the ICT Asset Tracking, Ticketing, Document Tracking and Fleet
+system used by the State Department for Justice, Human Rights and
+Constitutional Affairs (SDJHRCA).
 
-## Overview
+Built with Express 5, TypeScript and Prisma on PostgreSQL.
 
-The system handles core functionalities such as asset registration, categorization, allocation, tracking, status management, and reporting. It enables administrators and authorized staff to manage assets throughout the entire asset lifecycle, from acquisition and assignment to maintenance and disposal.
+## What it covers
 
-The backend also supports secure user authentication and role-based access control, ensuring that different users, such as administrators, managers, and staff members, have appropriate permissions within the system.
+- **Assets** — registration, categories, status, procurement details and
+  warranty, with reports by Kenya government financial year (1 July – 30 June).
+- **Assignments** — issuing an asset to a member of staff, or to an **office**
+  by room number for shared equipment such as printers and scanners, which
+  survives transfers and handovers.
+- **Tickets** — staff raise faults; only ICT assigns them, so a ticket is never
+  given to an officer who is away.
+- **Documents** — memos routed to named officers, to a whole department, to all
+  HODs or to all staff, with private replies, attachments and an audit trail,
+  decided by the Principal Secretary.
+- **Fleet** — government vehicles, odometer readings, service intervals and
+  service history.
+- **Accounts** — access requests, approval, password resets and direct account
+  creation by an administrator.
 
-## Core Features
+## Roles
 
-### Asset Management
-- Register and manage organizational assets
-- Categorize assets by type, department, or status
-- Update asset information and ownership records
-- Track asset lifecycle and history
+| Role | Asset tracking & ticketing | Documents & fleet |
+| --- | --- | --- |
+| `ICT_ADMIN` | administrator | ordinary officer |
+| `ICT_OFFICER` | handles tickets and assets | ordinary officer |
+| `PS` | ordinary officer | administrator, and the only approver |
+| `DIRECTOR` / `ASSISTANT_DIRECTOR` | ordinary officer | administrator |
+| `HOD` | ordinary officer | sees their department's submissions |
+| `END_USER` | raises tickets | sends documents upward |
 
-### User & Role Management
-- Secure authentication and authorization
-- Role-based access control for administrators, managers, and staff
-- User account management and permissions handling
+The two subsystems have deliberately separate administrators: the ICT Admin has
+no standing over documents or the fleet, and the PS has none over asset
+tracking.
 
-### Asset Allocation & Tracking
-- Assign assets to departments or staff members
-- Transfer assets between users or departments
-- Monitor asset availability and usage
-- Maintain asset transaction history
+## Running it
 
-### Status Monitoring
-- Track asset conditions and statuses:
-  - Available
-  - Assigned
-  - Under Maintenance
-  - Damaged
-  - Retired
+```bash
+npm install
+npx prisma migrate deploy
+npm run build
+npm start
+```
 
-### Reporting & Search
-- Advanced search and filtering functionalities
-- Generate asset reports and summaries
-- Retrieve historical asset data efficiently
+For development, `npm run dev` watches the TypeScript sources.
 
-### Notifications & Logging
-- Email notifications for asset-related actions
-- Audit logging and activity tracking
-- Error handling and system validation for data integrity
+## Configuration
 
-## Technical Implementation
+Create a `.env` file (never committed):
 
-The backend was designed using a modern API-driven architecture to enable seamless communication between the frontend and server. A structured database system was implemented to manage:
-- Asset records
-- User information
-- Departmental allocations
-- Asset movement history
-- Administrative logs
+| Key | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `JWT_SECRET` | signs login tokens; long and random |
+| `PORT` | defaults to 5000 |
+| `FRONTEND_URL` | comma-separated origins allowed by CORS |
+| `BREVO_API_KEY` | outgoing email |
+| `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_USER` | sender identity |
+| `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD` | first administrator |
+| `INITIAL_ADMIN_FULL_NAME`, `INITIAL_ADMIN_STAFF_NO`, `INITIAL_ADMIN_JOB_TITLE` | its details |
 
-RESTful APIs were developed to support efficient CRUD (Create, Read, Update, Delete) operations and ensure smooth frontend integration.
+Seed the first administrator with `npm run seed`, or reset its password from
+`.env` with `npm run seed -- --reset-password`.
 
-## Security & Reliability
-
-The system was developed with a strong focus on:
-- Data security
-- Performance optimization
-- Scalability
-- Reliability
-- Maintainability
-
-Authentication, authorization, validation, and centralized error handling mechanisms were implemented to ensure secure and consistent system operations.
-
-## Conclusion
-
-The Asset Management System backend provides SDOJ with a reliable and scalable solution for managing organizational assets efficiently. The platform improves accountability, transparency, and operational efficiency by digitizing asset management processes and enabling secure access to asset information across departments.
+Uploaded document attachments are written to `uploads/documents` and are not
+part of the repository; back that folder up alongside the database.
