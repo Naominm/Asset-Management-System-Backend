@@ -1,10 +1,12 @@
-import { Role } from "@prisma/client";
 export interface CreateAccessRequestBody {
   fullName: string;
-  staffNo: string;
+  staffNo?: string;
+  staffNumber?: string;
   jobTitle: string;
   email: string;
-  departmentId: number;
-  roleRequested: Role;
-  reason: string;
+  departmentId?: number;
+  department?: string;
+  roleRequested?: "END_USER" | "HOD" | "ICT_OFFICER" | "ICT_ADMIN" | "PS" | "DIRECTOR" | "ASSISTANT_DIRECTOR";
+  role?: string;
+  reason?: string;
 }
