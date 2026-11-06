@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "migrate:fix-admin": "tsx src/migrations/fixAdminRole.ts",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "seed:demo": "node scripts/create-demo-users.mjs"
   },
   "keywords": [],
   "author": "",
