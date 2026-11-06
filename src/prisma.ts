@@ -9,17 +9,14 @@ if (!connectionString) {
   throw new Error("❌ DATABASE_URL is missing in .env");
 }
 
-// 1. Create a connection pool using the 'pg' library
 const pool = new Pool({ connectionString });
 
-// 2. Initialize the adapter
 const adapter = new PrismaPg(pool);
 
 declare global {
   var prisma: PrismaClient | undefined;
 }
 
-// 3. Pass the adapter to the constructor
 export const prisma =
   global.prisma ??
   new PrismaClient({
