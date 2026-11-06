@@ -1,0 +1,246 @@
+import type { Response } from "express";
+import type { AuthRequest } from "../types/auth.types.js";
+import {
+  assignTicket,
+  createTicket,
+  getTicketStats,
+  listTickets,
+  resolveTicket,
+  updateTicketStatus,
+} from "../services/ticket.service.js";
+import {
+  isTicketStatus,
+  type CreateTicketBody,
+} from "../types/ticket.types.js";
+import { prisma } from "../prisma.js";
+import { sendTicketAcknowledgementEmail } from "../services/emailService.js";
+
+const TICKET_PRIORITIES: readonly string[] = ["Critical", "High", "Medium", "Low"];
+
+function isShortText(value: unknown, max: number): boolean {
+  return typeof value === "string" && value.length <= max;
+}
+
+export const createTicketHandler = async (
+  req: AuthRequest<CreateTicketBody>,
+  res: Response,
+) => {
+  const { title, priority, department } = req.body;
+
+  if (!title || !priority || !department) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (!TICKET_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ message: "Invalid priority" });
+  }
+
+  const { affectedAssetTag, assignedTo } = req.body;
+  const tooLong =
+    !isShortText(title, 200) ||
+    !isShortText(department, 120) ||
+    (affectedAssetTag != null && !isShortText(affectedAssetTag, 80)) ||
+    (assignedTo != null && !isShortText(assignedTo, 120));
+
+  if (tooLong) {
+    return res.status(400).json({ message: "One or more fields are too long" });
+  }
+
+  const requesterId = Number(req.user?.id);
+
+  if (!Number.isFinite(requesterId)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  // Tickets are always raised unassigned; ICT staff allocate them afterwards.
+  const ticket = await createTicket(
+    { ...req.body, assignedTo: null },
+    requesterId,
+  );
+
+  const requester = await prisma.user.findUnique({
+    where: { id: requesterId },
+    select: { email: true, fullName: true },
+  });
+
+  if (requester?.email) {
+    await sendTicketAcknowledgementEmail({
+      to: requester.email,
+      name: requester.fullName,
+      ticketId: ticket.id,
+      issue: ticket.issue,
+      department: ticket.department,
+      assignedTo: ticket.assignedTo,
+    });
+  }
+
+  return res.status(201).json({ id: ticket.id });
+};
+
+export const listTicketsHandler = async (req: AuthRequest, res: Response) => {
+  const requesterId = Number(req.user?.id);
+  const requesterRole = String(req.user?.role || "");
+
+  if (!Number.isFinite(requesterId) || !requesterRole) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const filters: { status?: string; search?: string } = {};
+  const status = req.query.status as string | undefined;
+  const search = req.query.search as string | undefined;
+
+  if (status) filters.status = status;
+  if (search) filters.search = search;
+
+  const tickets = await listTickets({
+    ...filters,
+    requesterId,
+    requesterRole,
+  });
+
+  return res.status(200).json({ tickets });
+};
+
+export const ticketStatsHandler = async (req: AuthRequest, res: Response) => {
+  const requesterId = Number(req.user?.id);
+  const requesterRole = String(req.user?.role || "");
+
+  if (!Number.isFinite(requesterId) || !requesterRole) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  return res.status(200).json(await getTicketStats(requesterId, requesterRole));
+};
+
+export const resolveTicketHandler = async (req: AuthRequest, res: Response) => {
+  const requesterId = Number(req.user?.id);
+  const requesterRole = String(req.user?.role || "");
+
+  if (!Number.isFinite(requesterId) || !requesterRole) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const ticketId = String(req.params.ticketId || "").trim();
+  if (!ticketId) {
+    return res.status(400).json({ message: "Ticket ID is required" });
+  }
+
+  const result = await resolveTicket(ticketId, requesterId, requesterRole);
+
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+    return res
+      .status(403)
+      .json({ message: "Not allowed to resolve this ticket" });
+  }
+
+  return res.status(200).json({
+    message: "Ticket resolved successfully",
+    ticket: result.ticket,
+  });
+};
+
+export const updateTicketStatusHandler = async (
+  req: AuthRequest<{ status?: string }>,
+  res: Response,
+) => {
+  const requesterId = Number(req.user?.id);
+  const requesterRole = String(req.user?.role || "");
+
+  if (!Number.isFinite(requesterId) || !requesterRole) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const ticketId = String(req.params.ticketId || "").trim();
+  if (!ticketId) {
+    return res.status(400).json({ message: "Ticket ID is required" });
+  }
+
+  const nextStatus = req.body?.status;
+  if (!isTicketStatus(nextStatus)) {
+    return res.status(400).json({ message: "Valid status is required" });
+  }
+
+  const result = await updateTicketStatus(
+    ticketId,
+    nextStatus,
+    requesterId,
+    requesterRole,
+  );
+
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    if (result.reason === "forbidden") {
+      return res
+        .status(403)
+        .json({ message: "Not allowed to update this ticket" });
+    }
+
+    return res
+      .status(400)
+      .json({ message: "Invalid ticket status transition" });
+  }
+
+  return res.status(200).json({
+    message: `Ticket status updated to ${result.ticket.status}`,
+    ticket: result.ticket,
+  });
+};
+
+export const assignTicketHandler = async (
+  req: AuthRequest<{ assignedTo?: string }>,
+  res: Response,
+) => {
+  const requesterRole = String(req.user?.role || "");
+
+  if (!Number.isFinite(Number(req.user?.id)) || !requesterRole) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const ticketId = String(req.params.ticketId || "").trim();
+  if (!ticketId) {
+    return res.status(400).json({ message: "Ticket ID is required" });
+  }
+
+  const assignee = String(req.body?.assignedTo || "").trim();
+  if (!assignee || assignee.length > 120) {
+    return res.status(400).json({ message: "A valid assignee is required" });
+  }
+
+  // Only existing ICT staff may be given tickets.
+  const staff = await prisma.user.findFirst({
+    where: {
+      fullName: assignee,
+      isActive: true,
+      role: { in: ["ICT_ADMIN", "ICT_OFFICER"] },
+    },
+    select: { id: true },
+  });
+
+  if (!staff) {
+    return res
+      .status(400)
+      .json({ message: "Tickets can only be assigned to active ICT staff" });
+  }
+
+  const result = await assignTicket(ticketId, assignee, requesterRole);
+
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+    return res
+      .status(403)
+      .json({ message: "Only ICT staff can assign tickets" });
+  }
+
+  return res.status(200).json({
+    message: `Ticket assigned to ${assignee}`,
+    ticket: result.ticket,
+  });
+};
