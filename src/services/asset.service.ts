@@ -4,6 +4,7 @@ export const createAsset = async (data: any, userId: number) => {
   const {
     tagNo,
     systemAssetId,
+    department,
     category,
     subCategory,
     assetDescription,
@@ -15,27 +16,80 @@ export const createAsset = async (data: any, userId: number) => {
     imeiNumber,
     color,
     departmentId,
+    // Hardware specification fields
+    processorCpu,
+    ramMemory,
+    primaryStorage,
+    screenDisplaySize,
+    powerRating,
+    colourFinish,
+    operatingSystem,
+    osVersionBuildNumber,
+    ipAddress,
+    hostnameComputerName,
+    // Procurement fields
+    procurementDate,
+    supplierVendor,
+    fundingSource,
+    invoiceNumber,
+    lpoOrderNumber,
+    purchasePrice,
+    warrantyStartDate,
+    warrantyEndDate,
+    warrantyType,
+    warrantyProvider,
+    warrantyContactReference,
   } = data;
 
-  // ✅ Validation
   if (
     !tagNo ||
     !serialNumber ||
     !category ||
     !make ||
     !model ||
-    !departmentId
+    (!departmentId && !department)
   ) {
     throw new Error("Missing required fields");
   }
 
-  // ✅ Check duplicate
-  const existing = await prisma.asset.findUnique({
-    where: { serialNumber },
-  });
+  const parsedDepartmentId = Number(departmentId);
+  const hasDepartmentId =
+    Number.isFinite(parsedDepartmentId) && parsedDepartmentId > 0;
+  const departmentName = String(department || "").trim();
 
-  if (existing) {
+  const resolvedDepartment = hasDepartmentId
+    ? await prisma.department.findUnique({
+        where: { id: parsedDepartmentId },
+      })
+    : await prisma.department.upsert({
+        where: { name: departmentName },
+        update: {},
+        create: { name: departmentName },
+      });
+
+  if (!resolvedDepartment) {
+    throw new Error("Department not found");
+  }
+
+  const [duplicateSerial, duplicateTagNo, duplicateSystemAssetId] =
+    await Promise.all([
+      prisma.asset.findUnique({ where: { serialNumber } }),
+      prisma.asset.findUnique({ where: { tagNo } }),
+      systemAssetId
+        ? prisma.asset.findUnique({ where: { systemAssetId } })
+        : Promise.resolve(null),
+    ]);
+
+  if (duplicateSerial) {
     throw new Error("Asset with this serial number already exists");
+  }
+
+  if (duplicateTagNo) {
+    throw new Error("Asset tag number already exists");
+  }
+
+  if (duplicateSystemAssetId) {
+    throw new Error("System asset ID already exists");
   }
 
   const asset = await prisma.$transaction(async (tx) => {
@@ -54,10 +108,71 @@ export const createAsset = async (data: any, userId: number) => {
         imeiNumber,
         color,
         department: {
-          connect: { id: Number(departmentId) },
+          connect: { id: resolvedDepartment.id },
         },
       },
     });
+
+    // Create hardware spec record if any hardware data is provided
+    if (
+      processorCpu ||
+      ramMemory ||
+      primaryStorage ||
+      screenDisplaySize ||
+      powerRating ||
+      colourFinish ||
+      operatingSystem ||
+      osVersionBuildNumber ||
+      ipAddress ||
+      hostnameComputerName
+    ) {
+      await tx.hardwareSpec.create({
+        data: {
+          assetId: newAsset.id,
+          processor: processorCpu || null,
+          ram: ramMemory || null,
+          storage: primaryStorage || null,
+          screenSize: screenDisplaySize || null,
+          powerRating: powerRating || null,
+          color: colourFinish || null,
+          operatingSystem: operatingSystem || null,
+          osVersion: osVersionBuildNumber || null,
+          ipAddress: ipAddress || null,
+          hostName: hostnameComputerName || null,
+        },
+      });
+    }
+
+    // Create procurement record if any procurement data is provided
+    if (
+      procurementDate ||
+      supplierVendor ||
+      fundingSource ||
+      invoiceNumber ||
+      purchasePrice ||
+      warrantyStartDate ||
+      warrantyEndDate ||
+      warrantyType
+    ) {
+      await tx.procurement.create({
+        data: {
+          assetId: newAsset.id,
+          procurementDate: procurementDate
+            ? new Date(procurementDate)
+            : new Date(),
+          supplierVendor: supplierVendor || "",
+          fundingSource: fundingSource || null,
+          invoiceNumber: invoiceNumber || null,
+          iopNumber: lpoOrderNumber || null,
+          purchasePriceKES: purchasePrice ? parseFloat(purchasePrice) : null,
+          warrantyStart: warrantyStartDate ? new Date(warrantyStartDate) : null,
+          warrantyEnd: warrantyEndDate ? new Date(warrantyEndDate) : null,
+          warrantyType: warrantyType || null,
+          warrantyProvider: warrantyProvider || null,
+          warrantyContact: warrantyContactReference || null,
+        },
+      });
+    }
 
     await tx.activityLog.create({
       data: {
@@ -80,7 +195,11 @@ export const getAssetStats = async () => {
   const [total, assigned, inStore, maintenance] = await Promise.all([
     prisma.asset.count(),
     prisma.asset.count({ where: { status: "Assigned" } }),
-    prisma.asset.count({ where: { status: "InStore" } }),
+    prisma.asset.count({
+      where: {
+        OR: [{ status: "InStore" }, { status: "Available" }],
+      },
+    }),
     prisma.asset.count({ where: { status: "Maintenance" } }),
   ]);
 
@@ -93,7 +212,16 @@ export const getAllAssets = async (filters: any) => {
   const where: any = {};
 
   if (status && status !== "All") {
-    where.status = status;
+    // Map display status names to database status values
+    const statusMap: Record<string, string> = {
+      Assigned: "Assigned",
+      "In Store": "InStore",
+      Maintenance: "Maintenance",
+      Flagged: "Flagged",
+    };
+
+    const dbStatus = statusMap[status] || status;
+    where.status = dbStatus;
   }
 
   if (search) {
@@ -110,7 +238,20 @@ export const getAllAssets = async (filters: any) => {
       skip: (page - 1) * limit,
       take: Number(limit),
       include: {
-        department: { select: { name: true } }, // To show the DEPT column
+        department: { select: { name: true, id: true } },
+        procurement: {
+          select: {
+            procurementDate: true,
+            warrantyEnd: true,
+            warrantyType: true,
+          },
+        },
+        assignment: {
+          where: { status: "ACTIVE" },
+          orderBy: { assignedAt: "desc" },
+          take: 1,
+          select: { assignedTo: true, refNo: true },
+        },
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -131,7 +272,7 @@ export const getAssetById = async (id: number) => {
     include: {
       hardwareSpec: true,
       procurement: true,
-      department: { select: { name: true } },
+      department: { select: { name: true, id: true } },
       assignment: {
         orderBy: { assignedAt: "desc" },
         take: 5, // Last 5 people who had it
@@ -144,4 +285,155 @@ export const getAssetById = async (id: number) => {
 
   if (!asset) throw new Error("Asset not found");
   return asset;
+};
+
+export const updateAssetStatus = async (
+  id: number,
+  newStatus: string,
+  userId: number,
+) => {
+  // Validate status is one of the allowed enum values
+  const validStatuses = [
+    "Available",
+    "Assigned",
+    "InStore",
+    "Maintenance",
+    "Flagged",
+  ];
+  if (!validStatuses.includes(newStatus)) {
+    throw new Error(
+      `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
+    );
+  }
+
+  const asset = await prisma.asset.findUnique({
+    where: { id },
+  });
+
+  if (!asset) {
+    throw new Error("Asset not found");
+  }
+
+  if (asset.status === newStatus) {
+    throw new Error(`Asset is already in ${newStatus} status`);
+  }
+
+  const oldStatus = asset.status;
+
+  await prisma.$transaction(async (tx) => {
+    // Update asset status
+    await tx.asset.update({
+      where: { id },
+      data: { status: newStatus as any },
+    });
+
+    // Log the status change
+    await tx.activityLog.create({
+      data: {
+        assetId: id,
+        type: "STATUS_CHANGE",
+        message: `Asset status changed from ${oldStatus} to ${newStatus}`,
+        userId,
+      },
+    });
+  });
+
+  return { id, oldStatus, newStatus };
+};
+
+export const removeAsset = async (id: number, userId: number) => {
+  const asset = await prisma.asset.findUnique({
+    where: { id },
+    include: {
+      assignment: {
+        where: { status: "ACTIVE" },
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!asset) {
+    throw new Error("Asset not found");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.activityLog.create({
+      data: {
+        type: "STATUS_CHANGE",
+        message: `Asset ${asset.tagNo} removed from register`,
+        userId,
+      },
+    });
+
+    await tx.activityLog.deleteMany({ where: { assetId: id } });
+    await tx.assetAssignment.deleteMany({ where: { assetId: id } });
+    await tx.hardwareSpec.deleteMany({ where: { assetId: id } });
+    await tx.procurement.deleteMany({ where: { assetId: id } });
+    await tx.asset.delete({ where: { id } });
+  });
+
+  return { id };
+};
+
+// Which officers currently hold a computer (laptop/desktop) and which do not.
+const COMPUTER_CATEGORIES = ["Laptop", "Desktop", "Workstation"];
+
+export const getStaffDeviceCoverage = async () => {
+  const [staff, activeAssignments] = await Promise.all([
+    prisma.user.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        fullName: true,
+        staffNo: true,
+        department: { select: { name: true } },
+      },
+      orderBy: { fullName: "asc" },
+    }),
+    prisma.assetAssignment.findMany({
+      where: {
+        status: "ACTIVE",
+        assigneeType: "PERSON",
+        asset: { category: { in: COMPUTER_CATEGORIES } },
+      },
+      select: {
+        payRollNo: true,
+        assignedTo: true,
+        asset: { select: { category: true, tagNo: true } },
+      },
+    }),
+  ]);
+
+  const heldBy = new Map<string, { category: string; tagNo: string }[]>();
+  for (const assignment of activeAssignments) {
+    const key = String(assignment.payRollNo || "").trim().toLowerCase();
+    if (!key || !assignment.asset) continue;
+    const list = heldBy.get(key) || [];
+    list.push({ category: assignment.asset.category, tagNo: assignment.asset.tagNo });
+    heldBy.set(key, list);
+  }
+
+  const withDevice: unknown[] = [];
+  const withoutDevice: unknown[] = [];
+
+  for (const person of staff) {
+    const devices = heldBy.get(person.staffNo.trim().toLowerCase()) || [];
+    const entry = {
+      id: person.id,
+      fullName: person.fullName,
+      staffNo: person.staffNo,
+      department: person.department?.name || "Unassigned",
+      devices,
+    };
+    if (devices.length > 0) withDevice.push(entry);
+    else withoutDevice.push(entry);
+  }
+
+  return {
+    totalStaff: staff.length,
+    withDeviceCount: withDevice.length,
+    withoutDeviceCount: withoutDevice.length,
+    withDevice,
+    withoutDevice,
+  };
 };

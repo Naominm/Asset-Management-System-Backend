@@ -1,20 +1,26 @@
 import { Router } from "express";
 import {
+  staffDeviceCoverage,
   createAsset,
   getAssets,
   getStats,
   getAssetById,
+  removeAsset,
+  updateAssetStatus,
 } from "../controllers/asset.controller.js";
 import { authenticateToken } from "../middlewares/auth.middleware.js";
 
-const router = Router();
+const router: Router = Router();
 
 router.get("/status", authenticateToken, getStats);
+router.get("/device-coverage", authenticateToken, staffDeviceCoverage);
 
-router.get("/assets", authenticateToken, getAssets);
+router.get("/", authenticateToken, getAssets);
 
-router.post("/create", authenticateToken, createAsset);
+router.post("/", authenticateToken, createAsset);
 
 router.get("/:id", authenticateToken, getAssetById);
+router.patch("/:id/status", authenticateToken, updateAssetStatus);
+router.delete("/:id", authenticateToken, removeAsset);
 
 export default router;
